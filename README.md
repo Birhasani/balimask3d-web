@@ -114,6 +114,17 @@ We also provide our Zero123++ fine-tuning code since it is frequently requested.
 python train.py --base configs/zero123plus-finetune.yaml --gpus 0,1,2,3,4,5,6,7 --num_nodes 1
 ```
 
+## Inspecting checkpoints
+
+Inspect official or fine-tuned PyTorch checkpoints without initializing the InstantMesh or diffusion pipelines:
+
+```bash
+python tools/inspect_checkpoint.py --checkpoint ckpts/instant_mesh_large.ckpt
+python tools/inspect_checkpoint.py --checkpoint path/to/best_meshval_combined_I4_topology_aware_max.pt
+```
+
+The inspector loads tensors on CPU with PyTorch's restricted `weights_only` loader, reports likely state dictionaries, parameter shapes and prefixes, and classifies InstantMesh family coverage as full, partial, or unknown. It never writes to the checkpoint. CPU memory usage remains proportional to checkpoint size, and the report does not validate tensor compatibility against an instantiated model.
+
 # :books: Citation
 
 If you find our work useful for your research or applications, please cite using this BibTeX:
