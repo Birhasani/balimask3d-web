@@ -1,0 +1,30 @@
+models:
+  instantmesh_pretrained:
+    label: "InstantMesh Pretrained"
+    type: "pretrained"
+    checkpoint: null
+    enabled: true
+
+  instantmesh_i1:
+    label: "InstantMesh Fine-tuned I1"
+    type: "finetuned"
+    checkpoint: "best_meshval_combined_I1_depthnormal.pt"
+    enabled: true
+
+  instantmesh_i2:
+    label: "InstantMesh Fine-tuned I2"
+    type: "finetuned"
+    checkpoint: "best_meshval_combined_I2_supervision_same_trainable.pt"
+    enabled: true
+
+  instantmesh_i3:
+    label: "InstantMesh Fine-tuned I3"
+    type: "finetuned"
+    checkpoint: "best_meshval_combined_I3_trainable_plus_supervision.pt"
+    enabled: true
+
+  instantmesh_i4:
+    label: "InstantMesh Fine-tuned I4"
+    type: "finetuned"
+    checkpoint: "best_meshval_combined_I4_variation.pt"
+    enabled: true

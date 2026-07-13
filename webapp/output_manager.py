@@ -85,6 +85,7 @@ class OutputManager:
         self,
         paths: OutputPaths,
         *,
+        require_video: bool = True,
         require_mtl: bool,
         texture_paths: tuple[Path, ...],
     ) -> InferenceResult:
@@ -95,7 +96,6 @@ class OutputManager:
                 paths.processed_image,
                 paths.multiview_grid,
                 *paths.multiview_images,
-                paths.video,
                 paths.glb,
                 paths.obj,
                 paths.metadata,
@@ -103,6 +103,8 @@ class OutputManager:
             ),
             "required inference output",
         )
+        if require_video:
+            self._require_nonempty((paths.video,), "MP4 video")
         if require_mtl:
             self._require_nonempty((paths.mtl,), "MTL file")
         if texture_paths:
@@ -114,7 +116,7 @@ class OutputManager:
             request_id=paths.request_id,
             processed_image_path=paths.processed_image,
             multiview_image_paths=paths.multiview_images,
-            video_path=paths.video,
+            video_path=paths.video if require_video else None,
             glb_path=paths.glb,
             obj_path=paths.obj,
             mtl_path=paths.mtl if require_mtl else None,

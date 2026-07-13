@@ -179,7 +179,7 @@ class OutputManagerTests(unittest.TestCase):
             manager.write_metadata(paths, {"request_id": paths.request_id})
             manager.create_archive(paths)
             result = manager.validate_and_build_result(
-                paths, require_mtl=True, texture_paths=(paths.texture,)
+                paths, require_video=True, require_mtl=True, texture_paths=(paths.texture,)
             )
 
             self.assertEqual(result.request_id, paths.request_id)
@@ -194,8 +194,33 @@ class OutputManagerTests(unittest.TestCase):
             paths.processed_image.touch()
             with self.assertRaisesRegex(OutputValidationError, "missing or empty"):
                 manager.validate_and_build_result(
-                    paths, require_mtl=True, texture_paths=(paths.texture,)
+                    paths, require_video=True, require_mtl=True, texture_paths=(paths.texture,)
                 )
+
+    def test_debug_output_contract_allows_skipped_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = OutputManager(Path(directory) / "outputs")
+            paths = manager.create_request_paths()
+            for path in (
+                paths.processed_image,
+                paths.multiview_grid,
+                *paths.multiview_images,
+                paths.glb,
+                paths.obj,
+                paths.mtl,
+                paths.texture,
+            ):
+                self.write_nonempty(path)
+            manager.write_metadata(paths, {"video_skipped": True})
+            manager.create_archive(paths)
+            result = manager.validate_and_build_result(
+                paths,
+                require_video=False,
+                require_mtl=True,
+                texture_paths=(paths.texture,),
+            )
+
+        self.assertIsNone(result.video_path)
 
 
 if __name__ == "__main__":

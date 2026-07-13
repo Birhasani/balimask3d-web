@@ -23,6 +23,9 @@ class InferenceRequest:
     input_image_path: Path
     model_variant: str = "pretrained"
     remove_background: bool = False
+    seed: int | None = None
+    diffusion_steps: int | None = None
+    skip_video: bool = False
 
 
 @dataclass(frozen=True)
@@ -32,7 +35,7 @@ class InferenceResult:
     request_id: str
     processed_image_path: Path
     multiview_image_paths: tuple[Path, ...]
-    video_path: Path
+    video_path: Path | None
     glb_path: Path
     obj_path: Path
     mtl_path: Path | None
