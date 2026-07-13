@@ -41,3 +41,43 @@ figures*/
 *.sh
 blender/
 .restore/
+
+# Model checkpoints
+checkpoints/
+ckpts/custom/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Generated outputs
+outputs/
+temp/
+gradio_cached_examples/
+
+# Secrets
+.env
+.env.*
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local IDE
+.vscode/settings.json
+
+# Large generated assets
+*.mp4
+*.glb
+*.obj
+*.mtl
+
+!references/examples/*.obj
+!references/examples/*.glb
