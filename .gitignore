@@ -39,6 +39,7 @@ figures*/
 
 # Useless Files
 *.sh
+!scripts/bootstrap_colab.sh
 blender/
 .restore/
 

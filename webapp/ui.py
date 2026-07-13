@@ -8,6 +8,7 @@ service, whose own lock serializes checkpoint switching and GPU inference.
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import re
 import shutil
@@ -286,7 +287,9 @@ class InstantMeshUIController:
                         remove_background=bool(remove_background),
                         seed=seed_value,
                         diffusion_steps=step_value,
-                        skip_video=not bool(save_video),
+                        # Production output always includes the rotating MP4.
+                        # The checkbox is retained as a visible contract indicator.
+                        skip_video=False,
                     )
                 )
                 metadata = self._read_public_metadata(result)
@@ -313,19 +316,37 @@ def build_demo(
 ) -> gr.Blocks:
     """Build the component tree and single-concurrency queue."""
 
-    cache_policy = (cleanup_policy.interval_seconds, cleanup_policy.retention_seconds)
-    with gr.Blocks(title="InstantMesh", delete_cache=cache_policy) as demo:
+    blocks_kwargs: dict[str, Any] = {"title": "InstantMesh"}
+    if "delete_cache" in inspect.signature(gr.Blocks).parameters:
+        blocks_kwargs["delete_cache"] = (
+            cleanup_policy.interval_seconds,
+            cleanup_policy.retention_seconds,
+        )
+    with gr.Blocks(**blocks_kwargs) as demo:
         gr.Markdown(
             "# InstantMesh\nGenerate a textured 3D mesh and rotating preview from one image."
         )
         with gr.Row():
             with gr.Column(scale=1):
-                input_image = gr.Image(
-                    label="Input image",
-                    sources=["upload", "webcam"],
-                    type="filepath",
-                    image_mode="RGBA",
-                )
+                image_parameters = inspect.signature(gr.Image).parameters
+
+                def image_input(label: str, source: str):
+                    kwargs: dict[str, Any] = {
+                        "label": label,
+                        "type": "filepath",
+                        "image_mode": "RGBA",
+                    }
+                    if "sources" in image_parameters:
+                        kwargs["sources"] = [source]
+                    else:
+                        kwargs["source"] = source
+                    return gr.Image(**kwargs)
+
+                with gr.Tabs():
+                    with gr.Tab("Upload"):
+                        uploaded_image = image_input("Upload image", "upload")
+                    with gr.Tab("Webcam"):
+                        webcam_image = image_input("Capture image", "webcam")
                 model = gr.Dropdown(
                     label="Reconstruction model",
                     choices=list(registry.choices),
@@ -339,7 +360,11 @@ def build_demo(
                     )
                 with gr.Row():
                     remove_background = gr.Checkbox(label="Remove background", value=True)
-                    save_video = gr.Checkbox(label="Save rotating video", value=True)
+                    save_video = gr.Checkbox(
+                        label="Save rotating video (required)",
+                        value=True,
+                        interactive=False,
+                    )
                 generate = gr.Button("Generate", variant="primary")
 
             with gr.Column(scale=2):
@@ -362,17 +387,31 @@ def build_demo(
             )
             video = gr.Video(label="Rotating preview", format="mp4", interactive=False)
 
-        metadata = gr.JSON(label="Inference metadata", open=False)
+        json_kwargs: dict[str, Any] = {"label": "Inference metadata"}
+        if "open" in inspect.signature(gr.JSON).parameters:
+            json_kwargs["open"] = False
+        metadata = gr.JSON(**json_kwargs)
         with gr.Row():
             glb_download = gr.File(label="Download GLB", interactive=False)
             zip_download = gr.File(
                 label="Download OBJ, MTL and texture ZIP", interactive=False
             )
 
-        generate.click(
-            fn=controller.generate,
-            inputs=[input_image, model, seed, steps, remove_background, save_video],
-            outputs=[
+        def generate_from_sources(upload_path, webcam_path, *request_options):
+            return controller.generate(upload_path or webcam_path, *request_options)
+
+        click_kwargs: dict[str, Any] = {
+            "fn": generate_from_sources,
+            "inputs": [
+                uploaded_image,
+                webcam_image,
+                model,
+                seed,
+                steps,
+                remove_background,
+                save_video,
+            ],
+            "outputs": [
                 processed,
                 gallery,
                 model_viewer,
@@ -381,13 +420,23 @@ def build_demo(
                 glb_download,
                 zip_download,
             ],
-            concurrency_limit=1,
-            concurrency_id=GPU_CONCURRENCY_ID,
-            trigger_mode="once",
-            api_name="generate",
-        )
+            "api_name": "generate",
+        }
+        click_parameters = inspect.signature(generate.click).parameters
+        if "concurrency_limit" in click_parameters:
+            click_kwargs["concurrency_limit"] = 1
+            click_kwargs["concurrency_id"] = GPU_CONCURRENCY_ID
+        if "trigger_mode" in click_parameters:
+            click_kwargs["trigger_mode"] = "once"
+        generate.click(**click_kwargs)
 
-    demo.queue(max_size=10, default_concurrency_limit=1)
+    queue_kwargs: dict[str, Any] = {"max_size": 10}
+    queue_parameters = inspect.signature(demo.queue).parameters
+    if "default_concurrency_limit" in queue_parameters:
+        queue_kwargs["default_concurrency_limit"] = 1
+    elif "concurrency_count" in queue_parameters:
+        queue_kwargs["concurrency_count"] = 1
+    demo.queue(**queue_kwargs)
     return demo
 
 

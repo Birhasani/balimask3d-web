@@ -132,6 +132,8 @@ class PublicOutputTests(unittest.TestCase):
 
         self.assertEqual(creations, 1)
         self.assertEqual(len(service.requests), 2)
+        self.assertFalse(service.requests[0].skip_video)
+        self.assertFalse(service.requests[1].skip_video)
         self.assertEqual(first[4]["input_image_path"], "input.png")
         self.assertEqual(second[2], str(result.glb_path))
 
