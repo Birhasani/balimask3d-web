@@ -33,10 +33,20 @@ REQUIRED_IMPORTS = (
     "webapp.instantmesh_service",
     "nvdiffrast.torch",
     "xatlas",
+    "trimesh",
     "mcubes",
     "plyfile",
     "onnxruntime",
     "rembg",
+)
+
+FORBIDDEN_DISTRIBUTIONS = (
+    "peft",
+    "cupy",
+    "cupy-cuda11x",
+    "cupy-cuda12x",
+    "cupy-cuda13x",
+    "onnxruntime-gpu",
 )
 
 
@@ -101,6 +111,22 @@ def main() -> int:
     print(f"diffusers version: {distribution_version('diffusers')}")
     print(f"transformers version: {distribution_version('transformers')}")
 
+    print("Forbidden optional packages:")
+    for distribution in FORBIDDEN_DISTRIBUTIONS:
+        installed = distribution_version(distribution)
+        status = "not installed" if installed is None else f"INSTALLED ({installed})"
+        print(f"  {distribution}: {status}")
+        if installed is not None:
+            errors.append(f"{distribution} must not be installed in the InstantMesh runtime")
+    peft_module = importlib.util.find_spec("peft")
+    cupy_module = importlib.util.find_spec("cupy")
+    print(f"PEFT module availability: {peft_module is not None}")
+    print(f"CuPy module availability: {cupy_module is not None}")
+    if peft_module is not None:
+        errors.append("PEFT remains importable after bootstrap cleanup")
+    if cupy_module is not None:
+        errors.append("CuPy remains importable after bootstrap cleanup")
+
     for distribution, expected in EXPECTED_VERSIONS.items():
         installed = distribution_version(distribution)
         if installed != expected:
@@ -120,12 +146,32 @@ def main() -> int:
             errors.append(f"required import failed: {module_name}: {detail}")
 
     onnxruntime = imported.get("onnxruntime")
+    providers: list[str] = []
     if onnxruntime is not None:
         providers = list(onnxruntime.get_available_providers())
         print(f"ONNX Runtime version: {onnxruntime.__version__}")
         print(f"ONNX Runtime providers: {providers}")
-        if not providers:
-            errors.append("ONNX Runtime has no available execution provider")
+        if "CPUExecutionProvider" not in providers:
+            errors.append(
+                "ONNX Runtime CPUExecutionProvider is unavailable; install rembg[cpu]"
+            )
+
+    rembg = imported.get("rembg")
+    if rembg is None:
+        print("rembg u2net session: not run because rembg import failed")
+    elif "CPUExecutionProvider" not in providers:
+        print("rembg u2net session: not run because CPUExecutionProvider is unavailable")
+    else:
+        try:
+            session = rembg.new_session("u2net")
+            session_providers = list(session.inner_session.get_providers())
+            print(f"rembg u2net session: OK (providers={session_providers})")
+            if "CPUExecutionProvider" not in session_providers:
+                errors.append("rembg u2net session does not expose CPUExecutionProvider")
+            del session
+        except (Exception, SystemExit) as error:
+            print(f"rembg u2net session: FAILED ({error})")
+            errors.append(f'rembg.new_session("u2net") failed: {error}')
 
     if errors:
         print("Environment verification failed:", file=sys.stderr)

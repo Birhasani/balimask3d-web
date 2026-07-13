@@ -18,6 +18,51 @@ if ! python -c 'import torch, torchvision' >/dev/null 2>&1; then
   exit 1
 fi
 
+# Colab images may carry optional ML/GPU packages that are incompatible with
+# the notebook-pinned Diffusers/Accelerate stack. InstantMesh does not use them.
+CONFLICTING_DISTRIBUTIONS=(
+  peft
+  cupy
+  cupy-cuda11x
+  cupy-cuda12x
+  cupy-cuda13x
+  onnxruntime-gpu
+)
+mapfile -t INSTALLED_CONFLICTS < <(
+  python - "${CONFLICTING_DISTRIBUTIONS[@]}" <<'PY'
+import importlib.metadata
+import sys
+
+for name in sys.argv[1:]:
+    try:
+        importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        continue
+    print(name)
+PY
+)
+if ((${#INSTALLED_CONFLICTS[@]})); then
+  echo "Removing incompatible optional packages: ${INSTALLED_CONFLICTS[*]}"
+  python -m pip uninstall -y "${INSTALLED_CONFLICTS[@]}"
+else
+  echo "PEFT, CuPy, and GPU ONNX Runtime conflicts are absent."
+fi
+
+# onnxruntime and onnxruntime-gpu share module files. Removing the GPU wheel can
+# leave stale CPU distribution metadata behind; remove only that broken record.
+if python -c 'import importlib.metadata; importlib.metadata.version("onnxruntime")' \
+  >/dev/null 2>&1; then
+  if ! python - <<'PY' >/dev/null 2>&1
+import onnxruntime
+
+assert "CPUExecutionProvider" in onnxruntime.get_available_providers()
+PY
+  then
+    echo "Removing a broken CPU ONNX Runtime record before installing rembg[cpu]."
+    python -m pip uninstall -y onnxruntime
+  fi
+fi
+
 SYSTEM_PACKAGES=(build-essential ffmpeg git libgl1 libglib2.0-0)
 MISSING_SYSTEM_PACKAGES=()
 for package in "${SYSTEM_PACKAGES[@]}"; do
@@ -60,8 +105,6 @@ PYTHON_REQUIREMENTS=(
   imageio-ffmpeg
   matplotlib
   plotly
-  trimesh
-  'xatlas==0.0.11'
   plyfile
   PyMCubes
   torchmetrics
@@ -71,8 +114,6 @@ PYTHON_REQUIREMENTS=(
   sentencepiece
   'huggingface_hub==0.25.2'
   'accelerate==0.27.2'
-  'diffusers==0.26.3'
-  'transformers==4.38.2'
   'gradio==3.41.2'
   'rembg[cpu]'
   pymatting
@@ -84,7 +125,58 @@ PYTHON_REQUIREMENTS=(
   packaging
   jedi
 )
+
+# Snapshot protected packages before dependency resolution. They are omitted
+# from the install request and must retain the versions established in Stage 14.
+PROTECTED_BEFORE="$(python - <<'PY'
+import importlib.metadata
+import json
+import torch
+import torchvision
+
+names = ("transformers", "diffusers", "nvdiffrast", "xatlas", "trimesh")
+versions = {}
+for name in names:
+    try:
+        versions[name] = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        versions[name] = None
+versions.update(
+    torch=torch.__version__,
+    torchvision=torchvision.__version__,
+    cuda=torch.version.cuda,
+)
+print(json.dumps(versions, sort_keys=True))
+PY
+)"
 python -m pip install --constraint "${CONSTRAINTS_FILE}" "${PYTHON_REQUIREMENTS[@]}"
+PROTECTED_AFTER="$(python - <<'PY'
+import importlib.metadata
+import json
+import torch
+import torchvision
+
+names = ("transformers", "diffusers", "nvdiffrast", "xatlas", "trimesh")
+versions = {}
+for name in names:
+    try:
+        versions[name] = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        versions[name] = None
+versions.update(
+    torch=torch.__version__,
+    torchvision=torchvision.__version__,
+    cuda=torch.version.cuda,
+)
+print(json.dumps(versions, sort_keys=True))
+PY
+)"
+if [[ "${PROTECTED_AFTER}" != "${PROTECTED_BEFORE}" ]]; then
+  echo "Protected runtime versions changed unexpectedly." >&2
+  echo "Before: ${PROTECTED_BEFORE}" >&2
+  echo "After:  ${PROTECTED_AFTER}" >&2
+  exit 1
+fi
 
 read -r DETECTED_ARCH DETECTED_CUDA_HOME < <(
   python - <<'PY'
@@ -118,13 +210,11 @@ export MAX_JOBS="${REQUESTED_MAX_JOBS}"
 echo "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 echo "MAX_JOBS=${MAX_JOBS}"
 
-if python -c 'import nvdiffrast.torch' >/dev/null 2>&1; then
-  echo "nvdiffrast is already importable; leaving the installation unchanged."
-else
-  python -m pip install \
-    'git+https://github.com/NVlabs/nvdiffrast.git' \
-    --no-build-isolation
+if ! python -c 'import nvdiffrast.torch' >/dev/null 2>&1; then
+  echo "nvdiffrast is not importable; refusing to reinstall the protected extension." >&2
+  exit 1
 fi
+echo "nvdiffrast is already importable; leaving the installation unchanged."
 
 # Creating the CUDA context compiles the extension for the detected architecture
 # on first use and is a no-op against the cached build on later runs.
