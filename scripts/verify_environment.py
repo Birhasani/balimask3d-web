@@ -20,10 +20,14 @@ EXPECTED_VERSIONS = {
     "numpy": "1.26.4",
     "huggingface-hub": "0.25.2",
     "accelerate": "0.27.2",
+    "tokenizers": "0.15.2",
     "diffusers": "0.26.3",
     "transformers": "4.38.2",
     "xatlas": "0.0.11",
     "gradio": "3.41.2",
+    "fastapi": "0.103.0",
+    "starlette": "0.27.0",
+    "pydantic": "1.10.23",
 }
 
 REQUIRED_IMPORTS = (
@@ -68,6 +72,41 @@ def import_status(module_name: str) -> tuple[bool, str, Any | None]:
     return True, f"OK ({module_path or 'built-in'})", module
 
 
+def verify_web_stack(errors: list[str]) -> None:
+    """Construct a minimal legacy Gradio app without loading InstantMesh."""
+
+    try:
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            gr.Markdown("InstantMesh web-stack verification")
+        del demo
+        print("Minimal gr.Blocks construction: OK")
+    except (Exception, SystemExit) as error:
+        print(f"Minimal gr.Blocks construction: FAILED ({error})")
+        errors.append(f"minimal gr.Blocks construction failed: {error}")
+
+
+def verify_huggingface_compatibility(errors: list[str]) -> None:
+    """Check symbols required by the pinned InstantMesh diffusion runtime."""
+
+    try:
+        from huggingface_hub import cached_download
+
+        print(f"huggingface_hub.cached_download import: OK ({cached_download.__module__})")
+    except (Exception, SystemExit) as error:
+        print(f"huggingface_hub.cached_download import: FAILED ({error})")
+        errors.append(f"huggingface_hub.cached_download import failed: {error}")
+
+    try:
+        from diffusers import DiffusionPipeline
+
+        print(f"diffusers.DiffusionPipeline import: OK ({DiffusionPipeline.__module__})")
+    except (Exception, SystemExit) as error:
+        print(f"diffusers.DiffusionPipeline import: FAILED ({error})")
+        errors.append(f"diffusers.DiffusionPipeline import failed: {error}")
+
+
 def main() -> int:
     errors: list[str] = []
     print(f"Python version: {platform.python_version()}")
@@ -110,6 +149,14 @@ def main() -> int:
 
     print(f"diffusers version: {distribution_version('diffusers')}")
     print(f"transformers version: {distribution_version('transformers')}")
+    print(f"huggingface_hub version: {distribution_version('huggingface-hub')}")
+    print(f"gradio version: {distribution_version('gradio')}")
+    print(f"FastAPI version: {distribution_version('fastapi')}")
+    print(f"Starlette version: {distribution_version('starlette')}")
+    print(f"Pydantic version: {distribution_version('pydantic')}")
+
+    verify_web_stack(errors)
+    verify_huggingface_compatibility(errors)
 
     print("Forbidden optional packages:")
     for distribution in FORBIDDEN_DISTRIBUTIONS:
@@ -172,6 +219,19 @@ def main() -> int:
         except (Exception, SystemExit) as error:
             print(f"rembg u2net session: FAILED ({error})")
             errors.append(f'rembg.new_session("u2net") failed: {error}')
+
+    dr = imported.get("nvdiffrast.torch")
+    if dr is None or not torch.cuda.is_available():
+        print("nvdiffrast RasterizeCudaContext: not run (CUDA or import unavailable)")
+    else:
+        try:
+            context = dr.RasterizeCudaContext(device=torch.device("cuda:0"))
+            print("nvdiffrast RasterizeCudaContext: OK")
+            del context
+            torch.cuda.empty_cache()
+        except Exception as error:
+            print(f"nvdiffrast RasterizeCudaContext: FAILED ({error})")
+            errors.append(f"nvdiffrast RasterizeCudaContext creation failed: {error}")
 
     if errors:
         print("Environment verification failed:", file=sys.stderr)

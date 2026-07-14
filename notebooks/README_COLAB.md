@@ -1,8 +1,9 @@
 # Google Colab Workflow
 
 Use a Python 3.12 GPU runtime. Run the cells in order. The bootstrap preserves
-Colab's PyTorch, torchvision, CUDA, and optional xformers installations while
-installing the versions used by the working InstantMesh notebooks.
+Colab's PyTorch, torchvision, and CUDA stack while installing the exact
+notebook-compatible application dependencies. It does not install PEFT, CuPy,
+onnxruntime-gpu, or xformers.
 
 ## 1. Mount Google Drive
 
@@ -25,7 +26,8 @@ if not REPO_DIR.exists():
 ## 3. Install dependencies and native extensions
 
 This is idempotent: installed system packages, compatible Python packages, and
-an importable nvdiffrast build are retained.
+an importable nvdiffrast build are retained. On a fresh runtime, nvdiffrast is
+built from the official NVlabs repository for the detected GPU capability.
 
 ```bash
 !bash scripts/bootstrap_colab.sh

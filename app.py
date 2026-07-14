@@ -78,6 +78,13 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger(__name__).error("Could not configure InstantMesh UI: %s", error)
         return 1
 
+    demo.queue(
+        concurrency_count=1,
+        status_update_rate=1,
+        max_size=5,
+        api_open=False,
+    )
+
     demo.launch(
         server_name=args.host,
         server_port=args.port,

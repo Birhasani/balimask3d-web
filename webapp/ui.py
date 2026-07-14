@@ -7,6 +7,7 @@ service, whose own lock serializes checkpoint switching and GPU inference.
 
 from __future__ import annotations
 
+import ast
 import json
 import inspect
 import logging
@@ -67,8 +68,10 @@ class RegistryConfiguration:
     """Validated registry and Gradio dropdown metadata."""
 
     registry: ModelRegistry
-    choices: tuple[tuple[str, str], ...]
+    choices: tuple[str, ...]
+    label_to_model_id: Mapping[str, str]
     default_variant: str
+    default_label: str
 
 
 def load_registry_configuration(
@@ -108,10 +111,14 @@ def load_registry_configuration(
             "model registry must contain exactly one enabled pretrained model"
         )
     registry = ModelRegistry(pretrained_name=pretrained_names[0])
-    choices: list[tuple[str, str]] = []
+    choices: list[str] = []
+    label_to_model_id: dict[str, str] = {}
     for name, entry in enabled:
         label = str(entry.get("label") or name)
-        choices.append((label, name))
+        if label in label_to_model_id:
+            raise UIConfigurationError(f"duplicate enabled model label: {label}")
+        choices.append(label)
+        label_to_model_id[label] = name
         if str(entry.get("type")).lower() == "pretrained":
             if entry.get("checkpoint") not in (None, ""):
                 raise UIConfigurationError(
@@ -134,8 +141,45 @@ def load_registry_configuration(
     return RegistryConfiguration(
         registry=registry,
         choices=tuple(choices),
+        label_to_model_id=label_to_model_id,
         default_variant=pretrained_names[0],
+        default_label=next(
+            label for label, model_id in label_to_model_id.items()
+            if model_id == pretrained_names[0]
+        ),
     )
+
+
+def normalize_model_selection(
+    raw_value: Any, label_to_model_id: Mapping[str, str]
+) -> str:
+    """Resolve Gradio and legacy dropdown values to an exact registry model ID."""
+
+    valid_model_ids = frozenset(label_to_model_id.values())
+    if isinstance(raw_value, (tuple, list)):
+        if len(raw_value) != 2:
+            raise UIConfigurationError("model selection tuple/list must contain two values")
+        for candidate in (raw_value[1], raw_value[0]):
+            try:
+                return normalize_model_selection(candidate, label_to_model_id)
+            except UIConfigurationError:
+                continue
+        raise UIConfigurationError(f"unknown model selection: {raw_value!r}")
+
+    if isinstance(raw_value, str):
+        selected = raw_value.strip()
+        if selected in valid_model_ids:
+            return selected
+        if selected in label_to_model_id:
+            return label_to_model_id[selected]
+        try:
+            legacy_value = ast.literal_eval(selected)
+        except (SyntaxError, ValueError):
+            legacy_value = None
+        if isinstance(legacy_value, (tuple, list)):
+            return normalize_model_selection(legacy_value, label_to_model_id)
+
+    raise UIConfigurationError(f"unknown model selection: {raw_value!r}")
 
 
 def cleanup_stale_outputs(
@@ -204,11 +248,15 @@ class InstantMeshUIController:
         *,
         outputs_root: Path,
         cleanup_policy: CleanupPolicy,
+        registry: ModelRegistry,
+        label_to_model_id: Mapping[str, str],
         logger: logging.Logger | None = None,
     ) -> None:
         self._service_factory = service_factory
         self._outputs_root = Path(outputs_root).expanduser().resolve()
         self._cleanup_policy = cleanup_policy
+        self._registry = registry
+        self._label_to_model_id = dict(label_to_model_id)
         self._logger = logger or LOGGER
         self._service: InstantMeshService | None = None
         self._service_lock = threading.Lock()
@@ -255,7 +303,7 @@ class InstantMeshUIController:
     def generate(
         self,
         image_path: str | None,
-        model_variant: str,
+        model_variant: Any,
         seed: int | float,
         diffusion_steps: int | float,
         remove_background: bool,
@@ -276,6 +324,22 @@ class InstantMeshUIController:
             if float(diffusion_steps) != step_value or step_value <= 0:
                 raise ValueError("Diffusion steps must be a positive integer.")
 
+            normalized_model_id = normalize_model_selection(
+                model_variant, self._label_to_model_id
+            )
+            selected_variant = self._registry.get(normalized_model_id)
+            checkpoint_filename = (
+                selected_variant.checkpoint_path.name
+                if selected_variant.checkpoint_path is not None
+                else None
+            )
+            self._logger.info(
+                "Model selection: raw=%r normalized=%s checkpoint=%s",
+                model_variant,
+                normalized_model_id,
+                checkpoint_filename or "<official pretrained>",
+            )
+
             # This lock spans cleanup, lazy initialization, checkpoint switching,
             # and inference, so a model variant cannot change mid-request.
             with self._request_lock:
@@ -283,7 +347,7 @@ class InstantMeshUIController:
                 result = self._get_service().infer(
                     InferenceRequest(
                         input_image_path=input_path,
-                        model_variant=model_variant,
+                        model_variant=normalized_model_id,
                         remove_background=bool(remove_background),
                         seed=seed_value,
                         diffusion_steps=step_value,
@@ -350,7 +414,7 @@ def build_demo(
                 model = gr.Dropdown(
                     label="Reconstruction model",
                     choices=list(registry.choices),
-                    value=registry.default_variant,
+                    value=registry.default_label,
                     interactive=True,
                 )
                 with gr.Row():
@@ -375,15 +439,12 @@ def build_demo(
                     rows=2,
                     object_fit="contain",
                     interactive=False,
-                    type="filepath",
                 )
 
         with gr.Row():
             model_viewer = gr.Model3D(
                 label="Interactive GLB viewer",
-                display_mode="solid",
                 interactive=False,
-                height=520,
             )
             video = gr.Video(label="Rotating preview", format="mp4", interactive=False)
 
@@ -466,5 +527,7 @@ def create_app(
         service_factory,
         outputs_root=output_dir,
         cleanup_policy=policy,
+        registry=registry.registry,
+        label_to_model_id=registry.label_to_model_id,
     )
     return build_demo(controller, registry, cleanup_policy=policy)

@@ -84,13 +84,19 @@ cat >"${CONSTRAINTS_FILE}" <<'EOF'
 numpy==1.26.4
 huggingface_hub==0.25.2
 accelerate==0.27.2
+tokenizers==0.15.2
 diffusers==0.26.3
 transformers==4.38.2
 xatlas==0.0.11
 gradio==3.41.2
+fastapi==0.103.0
+starlette==0.27.0
+pydantic==1.10.23
 EOF
 
 # These are the packages installed by the working inference/training notebooks.
+# The pinned ML and web compatibility packages stay in this single transaction,
+# preventing Gradio dependencies from upgrading huggingface_hub independently.
 # pip skips already-satisfied requirements; no --upgrade or blanket uninstall is used.
 PYTHON_REQUIREMENTS=(
   'numpy==1.26.4'
@@ -114,34 +120,31 @@ PYTHON_REQUIREMENTS=(
   sentencepiece
   'huggingface_hub==0.25.2'
   'accelerate==0.27.2'
+  'tokenizers==0.15.2'
+  'transformers==4.38.2'
+  'diffusers==0.26.3'
   'gradio==3.41.2'
+  'fastapi==0.103.0'
+  'starlette==0.27.0'
+  'pydantic==1.10.23'
+  'xatlas==0.0.11'
+  trimesh
   'rembg[cpu]'
   pymatting
   ripser
   persim
-  ninja
-  setuptools
-  wheel
   packaging
   jedi
 )
 
-# Snapshot protected packages before dependency resolution. They are omitted
-# from the install request and must retain the versions established in Stage 14.
+# Preserve only the Colab-provided GPU stack. The application dependencies
+# above are intentionally converged to the working notebook versions.
 PROTECTED_BEFORE="$(python - <<'PY'
-import importlib.metadata
 import json
 import torch
 import torchvision
 
-names = ("transformers", "diffusers", "nvdiffrast", "xatlas", "trimesh")
-versions = {}
-for name in names:
-    try:
-        versions[name] = importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        versions[name] = None
-versions.update(
+versions = dict(
     torch=torch.__version__,
     torchvision=torchvision.__version__,
     cuda=torch.version.cuda,
@@ -151,19 +154,11 @@ PY
 )"
 python -m pip install --constraint "${CONSTRAINTS_FILE}" "${PYTHON_REQUIREMENTS[@]}"
 PROTECTED_AFTER="$(python - <<'PY'
-import importlib.metadata
 import json
 import torch
 import torchvision
 
-names = ("transformers", "diffusers", "nvdiffrast", "xatlas", "trimesh")
-versions = {}
-for name in names:
-    try:
-        versions[name] = importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        versions[name] = None
-versions.update(
+versions = dict(
     torch=torch.__version__,
     torchvision=torchvision.__version__,
     cuda=torch.version.cuda,
@@ -172,7 +167,7 @@ print(json.dumps(versions, sort_keys=True))
 PY
 )"
 if [[ "${PROTECTED_AFTER}" != "${PROTECTED_BEFORE}" ]]; then
-  echo "Protected runtime versions changed unexpectedly." >&2
+  echo "PyTorch, torchvision, or the CUDA runtime changed unexpectedly." >&2
   echo "Before: ${PROTECTED_BEFORE}" >&2
   echo "After:  ${PROTECTED_AFTER}" >&2
   exit 1
@@ -198,23 +193,19 @@ if [[ ! -x "${DETECTED_CUDA_HOME}/bin/nvcc" ]] && ! command -v nvcc >/dev/null 2
   exit 1
 fi
 
-REQUESTED_MAX_JOBS="${MAX_JOBS:-4}"
-if ! [[ "${REQUESTED_MAX_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "MAX_JOBS must be a positive integer." >&2
-  exit 1
-fi
-if ((REQUESTED_MAX_JOBS > 4)); then
-  REQUESTED_MAX_JOBS=4
-fi
-export MAX_JOBS="${REQUESTED_MAX_JOBS}"
+export MAX_JOBS=4
 echo "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 echo "MAX_JOBS=${MAX_JOBS}"
 
-if ! python -c 'import nvdiffrast.torch' >/dev/null 2>&1; then
-  echo "nvdiffrast is not importable; refusing to reinstall the protected extension." >&2
-  exit 1
+if python -c 'import nvdiffrast.torch' >/dev/null 2>&1; then
+  echo "nvdiffrast is already importable; preserving the existing installation."
+else
+  echo "nvdiffrast is absent; installing official build prerequisites."
+  python -m pip install --constraint "${CONSTRAINTS_FILE}" setuptools wheel ninja
+  echo "Building NVlabs/nvdiffrast for CUDA capability ${TORCH_CUDA_ARCH_LIST}."
+  python -m pip install --no-build-isolation \
+    'git+https://github.com/NVlabs/nvdiffrast.git'
 fi
-echo "nvdiffrast is already importable; leaving the installation unchanged."
 
 # Creating the CUDA context compiles the extension for the detected architecture
 # on first use and is a no-op against the cached build on later runs.

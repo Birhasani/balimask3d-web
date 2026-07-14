@@ -10,12 +10,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from webapp.types import InferenceResult
+from webapp.model_registry import ModelRegistry
 from webapp.ui import (
     CleanupPolicy,
     InstantMeshUIController,
     cleanup_stale_outputs,
     create_app,
     load_registry_configuration,
+    normalize_model_selection,
     sanitize_metadata,
 )
 
@@ -29,6 +31,10 @@ class UIConfigurationTests(unittest.TestCase):
 
         self.assertEqual(loaded.default_variant, "instantmesh_pretrained")
         self.assertEqual(len(loaded.choices), 5)
+        self.assertEqual(
+            loaded.label_to_model_id["InstantMesh Fine-tuned I1"],
+            "instantmesh_i1",
+        )
         self.assertEqual(
             loaded.registry.get("instantmesh_i4").checkpoint_path.name,
             "best_meshval_combined_I4_variation.pt",
@@ -70,6 +76,19 @@ class CleanupTests(unittest.TestCase):
 
 
 class PublicOutputTests(unittest.TestCase):
+    def test_i1_model_selection_normalizes_all_supported_forms(self):
+        mapping = {"InstantMesh Fine-tuned I1": "instantmesh_i1"}
+        values = (
+            "InstantMesh Fine-tuned I1",
+            ("InstantMesh Fine-tuned I1", "instantmesh_i1"),
+            "('InstantMesh Fine-tuned I1', 'instantmesh_i1')",
+            "instantmesh_i1",
+        )
+
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(normalize_model_selection(value, mapping), "instantmesh_i1")
+
     def test_metadata_sanitization_removes_absolute_paths(self):
         sanitized = sanitize_metadata(
             {
@@ -125,6 +144,8 @@ class PublicOutputTests(unittest.TestCase):
                 factory,
                 outputs_root=root / "outputs",
                 cleanup_policy=CleanupPolicy(),
+                registry=ModelRegistry(pretrained_name="pretrained"),
+                label_to_model_id={"Pretrained": "pretrained"},
             )
             self.assertFalse(controller.service_created)
             first = controller.generate(input_path, "pretrained", 42, 75, True, False)
